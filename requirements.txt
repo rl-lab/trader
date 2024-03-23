@@ -1,0 +1,7 @@
+pandas
+numpy
+gymnasium
+flask
+pyecharts
+ccxt
+nest_asyncio
