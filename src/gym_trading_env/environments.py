@@ -3,6 +3,7 @@ from gymnasium import spaces
 import pandas as pd
 import numpy as np
 import datetime
+import random
 import glob
 from pathlib import Path
 
@@ -102,7 +103,7 @@ class TradingEnv(gym.Env):
                  render_mode="logs"
                  ):
         self.max_episode_duration = max_episode_duration
-        self.name = name
+        self.name = df["code"].iloc[0]
         self.verbose = verbose
 
         self.positions = positions
@@ -306,7 +307,7 @@ class TradingEnv(gym.Env):
 
     def log(self):
         if self.verbose > 0:
-            text = ""
+            text = f"{self.name}: "
             for key, value in self.results_metrics.items():
                 text += f"{key} : {value}   |   "
             print(text)
@@ -381,43 +382,25 @@ class MultiDatasetTradingEnv(TradingEnv):
 
     :type preprocess: function<pandas.DataFrame->pandas.DataFrame>
 
-    :param episodes_between_dataset_switch: Number of times a dataset is used to create an episode, before moving on to another dataset. It can be useful for performances when `max_episode_duration` is low.
-    :type episodes_between_dataset_switch: optional - int
     """
 
     def __init__(self,
-                 dataset_dir,
+                 datasets,
                  *args,
 
                  preprocess=lambda df: df,
-                 episodes_between_dataset_switch=1,
                  **kwargs):
-        self.dataset_dir = dataset_dir
+        self.datasets = datasets
         self.preprocess = preprocess
-        self.episodes_between_dataset_switch = episodes_between_dataset_switch
-        self.dataset_pathes = glob.glob(self.dataset_dir)
-        self.dataset_nb_uses = np.zeros(shape=(len(self.dataset_pathes), ))
         super().__init__(self.next_dataset(), *args, **kwargs)
 
     def next_dataset(self):
-        self._episodes_on_this_dataset = 0
-        # Find the indexes of the less explored dataset
-        potential_dataset_pathes = np.where(
-            self.dataset_nb_uses == self.dataset_nb_uses.min())[0]
-        # Pick one of them
-        random_int = np.random.randint(potential_dataset_pathes.size)
-        dataset_path = self.dataset_pathes[random_int]
-        self.dataset_nb_uses[random_int] += 1  # Update nb use counts
-
-        self.name = Path(dataset_path).name
-        return self.preprocess(pd.read_pickle(dataset_path))
+        return random.choice(self.datasets)
 
     def reset(self, seed=None):
-        self._episodes_on_this_dataset += 1
-        if self._episodes_on_this_dataset % self.episodes_between_dataset_switch == 0:
-            self._set_df(
-                self.next_dataset()
-            )
+        self._set_df(
+            self.next_dataset()
+        )
         if self.verbose > 1:
             print(f"Selected dataset {self.name} ...")
         return super().reset(seed)
