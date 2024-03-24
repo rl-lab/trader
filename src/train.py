@@ -4,6 +4,7 @@ from tqdm import tqdm
 import pandas as pd
 import numpy as np
 import time
+from torch.distributions.categorical import Categorical
 from gym_trading_env.environments import TradingEnv, MultiDatasetTradingEnv
 import gymnasium as gym
 
@@ -41,14 +42,14 @@ def make_env():
     env = MultiDatasetTradingEnv(
         name="hsi300",
         datasets=dfs,
-        windows=1,
+        windows=None,
         positions=positions,
         initial_position='random',
         trading_fees=0.01/100,
         borrow_interest_rate=0.0003/100,
         reward_function=reward_function,
         portfolio_initial_value=1000,
-        max_episode_duration=200,
+        max_episode_duration=400,
         verbose=0,
     )
 
@@ -68,7 +69,7 @@ class Agent(nn.Module):
     def __init__(self, num_actions):
         super().__init__()
         self.network = nn.Sequential(
-            layer_init(nn.Linear(5, 128)),
+            layer_init(nn.Linear(7, 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, 128)),
             nn.ReLU(),
@@ -116,19 +117,18 @@ class Agent(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden), lstm_state
 
 
-if __name__ = "__main__":
+if __name__ == "__main__":
     num_envs = 16
     T = 200
-    device = torch.device("cuda" if torch.cuda.is_available()
-                          and args.cuda else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env = gym.vector.SyncVectorEnv([make_env] * num_envs)
     agent = Agent(num_actions=len(positions)).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=2.5e-4, eps=1e-5)
 
     next_obs, info = env.reset()
-    print(observation.shape)
+    next_obs = torch.Tensor(next_obs).to(device)
 
-    obs = torch.zeros((T, *observation.shape)).to(device)
+    obs = torch.zeros((T, *next_obs.shape)).to(device)
     actions = torch.zeros((T, num_envs)).to(device)
     logprobs = torch.zeros((T, num_envs)).to(device)
     rewards = torch.zeros((T, num_envs)).to(device)
@@ -157,7 +157,7 @@ if __name__ = "__main__":
             actions[step] = action
             logprobs[step] = logprob
 
-            next_obs, reward, terminations, truncations, infos = envs.step(
+            next_obs, reward, terminations, truncations, infos = env.step(
                 action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
@@ -165,6 +165,8 @@ if __name__ = "__main__":
                 device), torch.Tensor(next_done).to(device)
 
         # bootstrap value if not done
+        Gamma = 0.99
+        Lambda = 0.95
         with torch.no_grad():
             next_value = agent.get_value(
                 next_obs,
@@ -173,23 +175,23 @@ if __name__ = "__main__":
             ).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
+            for t in reversed(range(T)):
+                if t == T - 1:
                     nextnonterminal = 1.0 - next_done
                     nextvalues = next_value
                 else:
                     nextnonterminal = 1.0 - dones[t + 1]
                     nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * \
+                delta = rewards[t] + Gamma * \
                     nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * \
-                    args.gae_lambda * nextnonterminal * lastgaelam
+                advantages[t] = lastgaelam = delta + Gamma * \
+                    Lambda * nextnonterminal * lastgaelam
             returns = advantages + values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+        b_obs = obs.reshape((-1,) + env.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
+        b_actions = actions.reshape((-1,) + env.single_action_space.shape)
         b_dones = dones.reshape(-1)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
@@ -198,15 +200,16 @@ if __name__ = "__main__":
         # Optimizing the policy and value network
 
         # Optimizing the policy and value network
-        assert args.num_envs % args.num_minibatches == 0
-        envsperbatch = args.num_envs // args.num_minibatches
-        envinds = np.arange(args.num_envs)
-        flatinds = np.arange(args.batch_size).reshape(
-            args.num_steps, args.num_envs)
+        num_minibatches = 8
+        update_epochs = 4
+        envsperbatch = num_envs // num_minibatches
+        envinds = np.arange(num_envs)
+        flatinds = np.arange(T * num_envs).reshape(T, num_envs)
         clipfracs = []
-        for epoch in range(args.update_epochs):
+
+        for epoch in range(update_epochs):
             np.random.shuffle(envinds)
-            for start in range(0, args.num_envs, envsperbatch):
+            for start in range(0, num_envs, envsperbatch):
                 end = start + envsperbatch
                 mbenvinds = envinds[start:end]
                 # be really careful about the index
@@ -227,27 +230,25 @@ if __name__ = "__main__":
                     old_approx_kl = (-logratio).mean()
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs += [((ratio - 1.0).abs() >
-                                   args.clip_coef).float().mean().item()]
+                                   0.2).float().mean().item()]
 
                 mb_advantages = b_advantages[mb_inds]
-                if args.norm_adv:
-                    mb_advantages = (
-                        mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+                mb_advantages = (
+                    mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
                 # Policy loss
                 pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * \
-                    torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                pg_loss2 = -mb_advantages * torch.clamp(ratio, 0.8, 1.2)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Value loss
                 newvalue = newvalue.view(-1)
-                if args.clip_vloss:
+                if True:
                     v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
                     v_clipped = b_values[mb_inds] + torch.clamp(
                         newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
+                        -0.2,
+                        0.2,
                     )
                     v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
                     v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
@@ -257,12 +258,10 @@ if __name__ = "__main__":
                         ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss - 0.01 * entropy_loss + v_loss
 
                 optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(
-                    agent.parameters(), args.max_grad_norm)
                 optimizer.step()
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
