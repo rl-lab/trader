@@ -21,7 +21,7 @@ def preprocess_function(df):
 
 
 num_stocks = 10
-dfs = [pd.read_csv(each, parse_dates=["time"], index_col="time")
+dfs = [preprocess_function(pd.read_csv(each, parse_dates=["time"], index_col="time"))
        for each in tqdm(glob("data/*.csv.gz")[:num_stocks], desc="reading datasets")]
 
 
@@ -39,7 +39,6 @@ def make_env():
         initial_position='random',
         trading_fees=0.01/100,
         borrow_interest_rate=0.0003/100,
-        preprocess=preprocess_function,
         reward_function=reward_function,
         portfolio_initial_value=1000,
         max_episode_duration=200,

@@ -30,60 +30,6 @@ def dynamic_feature_real_position(history):
 
 
 class TradingEnv(gym.Env):
-    """
-    An easy trading environment for OpenAI gym. It is recommended to use it this way :
-
-    .. code-block:: python
-
-        import gymnasium as gym
-        import gym_trading_env
-        env = gym.make('TradingEnv', ...)
-
-
-    :param df: The market DataFrame. It must contain 'open', 'high', 'low', 'close'. Index must be DatetimeIndex. Your desired inputs need to contain 'feature' in their column name : this way, they will be returned as observation at each step.
-    :type df: pandas.DataFrame
-
-    :param positions: List of the positions allowed by the environment.
-    :type positions: optional - list[int or float]
-
-    :param dynamic_feature_functions: The list of the dynamic features functions. By default, two dynamic features are added :
-
-        * the last position taken by the agent.
-        * the real position of the portfolio (that varies according to the price fluctuations)
-
-    :type dynamic_feature_functions: optional - list
-
-    :param reward_function: Take the History object of the environment and must return a float.
-    :type reward_function: optional - function<History->float>
-
-    :param windows: Default is None. If it is set to an int: N, every step observation will return the past N observations. It is recommended for Recurrent Neural Network based Agents.
-    :type windows: optional - None or int
-
-    :param trading_fees: Transaction trading fees (buy and sell operations). eg: 0.01 corresponds to 1% fees
-    :type trading_fees: optional - float
-
-    :param borrow_interest_rate: Borrow interest rate per step (only when position < 0 or position > 1). eg: 0.01 corresponds to 1% borrow interest rate per STEP ; if your know that your borrow interest rate is 0.05% per day and that your timestep is 1 hour, you need to divide it by 24 -> 0.05/100/24.
-    :type borrow_interest_rate: optional - float
-
-    :param portfolio_initial_value: Initial valuation of the portfolio.
-    :type portfolio_initial_value: float or int
-
-    :param initial_position: You can specify the initial position of the environment or set it to 'random'. It must contained in the list parameter 'positions'.
-    :type initial_position: optional - float or int
-
-    :param max_episode_duration: If a integer value is used, each episode will be truncated after reaching the desired max duration in steps (by returning `truncated` as `True`). When using a max duration, each episode will start at a random starting point.
-    :type max_episode_duration: optional - int or 'max'
-
-    :param max_episode_duration: If a integer value is used, each episode will be truncated after reaching the desired max duration in steps (by returning `truncated` as `True`). When using a max duration, each episode will start at a random starting point.
-    :type max_episode_duration: optional - int or 'max'
-
-    :param verbose: If 0, no log is outputted. If 1, the env send episode result logs.
-    :type verbose: optional - int
-
-    :param name: The name of the environment (eg. 'BTC/USDT')
-    :type name: optional - str
-
-    """
     metadata = {'render_modes': ['logs']}
 
     def __init__(self,
@@ -330,68 +276,11 @@ class TradingEnv(gym.Env):
 
 
 class MultiDatasetTradingEnv(TradingEnv):
-    """
-    (Inherits from TradingEnv) A TradingEnv environment that handles multiple datasets.
-    It automatically switches from one dataset to another at the end of an episode.
-    Bringing diversity by having several datasets, even from the same pair from different exchanges, is a good idea.
-    This should help avoiding overfitting.
-
-    It is recommended to use it this way :
-
-    .. code-block:: python
-
-        import gymnasium as gym
-        import gym_trading_env
-        env = gym.make('MultiDatasetTradingEnv',
-            dataset_dir = 'data/*.pkl',
-            ...
-        )
-
-
-
-    :param dataset_dir: A `glob path <https://docs.python.org/3.6/library/glob.html>`_ that needs to match your datasets. All of your datasets needs to match the dataset requirements (see docs from TradingEnv). If it is not the case, you can use the ``preprocess`` param to make your datasets match the requirements.
-    :type dataset_dir: str
-
-    :param preprocess: This function takes a pandas.DataFrame and returns a pandas.DataFrame. This function is applied to each dataset before being used in the environment.
-
-        For example, imagine you have a folder named 'data' with several datasets (formatted as .pkl)
-
-        .. code-block:: python
-
-            import pandas as pd
-            import numpy as np
-            import gymnasium as gym
-            from gym_trading_env
-
-            # Generating features.
-            def preprocess(df : pd.DataFrame):
-                # You can easily change your inputs this way
-                df["feature_close"] = df["close"].pct_change()
-                df["feature_open"] = df["open"]/df["close"]
-                df["feature_high"] = df["high"]/df["close"]
-                df["feature_low"] = df["low"]/df["close"]
-                df["feature_volume"] = df["volume"] / df["volume"].rolling(7*24).max()
-                df.dropna(inplace= True)
-                return df
-
-            env = gym.make(
-                    "MultiDatasetTradingEnv",
-                    dataset_dir= 'examples/data/*.pkl',
-                    preprocess= preprocess,
-                )
-
-    :type preprocess: function<pandas.DataFrame->pandas.DataFrame>
-
-    """
-
     def __init__(self,
                  datasets,
                  *args,
-
-                 preprocess=lambda df: df,
                  **kwargs):
         self.datasets = datasets
-        self.preprocess = preprocess
         super().__init__(self.next_dataset(), *args, **kwargs)
 
     def next_dataset(self):
