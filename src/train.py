@@ -1,3 +1,4 @@
+from gym_trading_env.renderer import Renderer
 import pandas as pd
 import numpy as np
 import time
@@ -6,8 +7,8 @@ import gymnasium as gym
 
 
 # Import your datas
-df = pd.read_csv("BTC_USD-Hourly.csv.gz",
-                 parse_dates=["date"], index_col="date")
+df = pd.read_csv("A_stock_5min.csv.gz",
+                 parse_dates=["time"], index_col="time")
 df.sort_index(inplace=True)
 df.dropna(inplace=True)
 df.drop_duplicates(inplace=True)
@@ -17,7 +18,7 @@ df["feature_close"] = df["close"].pct_change()
 df["feature_open"] = df["open"] / df["close"]
 df["feature_high"] = df["high"] / df["close"]
 df["feature_low"] = df["low"] / df["close"]
-df["feature_volume"] = df["Volume USD"] / df["Volume USD"].rolling(7*24).max()
+df["feature_volume"] = df["amount"] / df["amount"]
 df.dropna(inplace=True)
 
 
@@ -27,13 +28,10 @@ def reward_function(history):
     return np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
 
 
-# env = gym.make(
-#     "TradingEnv",
+
 env = TradingEnv(
-    name="BTCUSD",
     df=df,
-    windows=5,
-    # From -1 (=SHORT), to +1 (=LONG)
+    windows=25,
     positions=[-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2],
     initial_position='random',  # Initial position
     trading_fees=0.01/100,  # 0.01% per stock buy / sell
@@ -51,8 +49,17 @@ done, truncated = False, False
 observation, info = env.reset()
 print(info["date"], "btc price", info["data_open"])
 
+
 while not done and not truncated:
     action = env.action_space.sample()
+    # action = policy_net(observation)
     observation, reward, done, truncated, info = env.step(action)
+    data.append([observation, reward])
 
-env.save_for_render()
+for obs, reward in data:
+    policy_net.learn_step()
+
+
+# env.save_for_render()
+# renderer = Renderer(render_logs_dir="render_logs")
+# renderer.run()
