@@ -7,7 +7,7 @@ import gymnasium as gym
 
 
 # Import your datas
-df = pd.read_csv("A_stock_5min.csv.gz",
+df = pd.read_csv("examples/A_stock_5min.csv.gz",
                  parse_dates=["time"], index_col="time")
 df.sort_index(inplace=True)
 df.dropna(inplace=True)
@@ -28,8 +28,8 @@ def reward_function(history):
     return np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
 
 
-
 env = TradingEnv(
+    name=df["code"].iloc[0],
     df=df,
     windows=25,
     positions=[-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2],
@@ -54,12 +54,9 @@ while not done and not truncated:
     action = env.action_space.sample()
     # action = policy_net(observation)
     observation, reward, done, truncated, info = env.step(action)
-    data.append([observation, reward])
-
-for obs, reward in data:
-    policy_net.learn_step()
+    # data.append([observation, reward])
 
 
-# env.save_for_render()
-# renderer = Renderer(render_logs_dir="render_logs")
-# renderer.run()
+env.save_for_render()
+renderer = Renderer(render_logs_dir="render_logs")
+renderer.run()
