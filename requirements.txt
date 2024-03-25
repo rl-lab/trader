@@ -5,3 +5,5 @@ flask
 pyecharts
 ccxt
 nest_asyncio
+tqdm
+baostock
