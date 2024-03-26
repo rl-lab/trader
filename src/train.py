@@ -38,7 +38,7 @@ def reward_function(history):
     return np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
 
 
-positions = [-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2]
+positions = np.array([-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2])
 
 
 def make_env():
@@ -46,7 +46,7 @@ def make_env():
         name="hsi300",
         datasets=dfs,
         windows=None,
-        positions=positions,
+        positions=positions.tolist(),
         initial_position='random',
         trading_fees=0.01/100,
         borrow_interest_rate=0.0003/100,
@@ -149,8 +149,8 @@ if __name__ == "__main__":
     ma_positions = deque(maxlen=100)
     pbar = tqdm(total=100*1000*1000)
 
-    wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
-    wandb.init(project="trader")
+    # wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
+    # wandb.init(project="trader")
 
     last_wandb_time = time.time()
     while True:
@@ -166,7 +166,7 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
-            ma_positions.append(actions.mean().item())
+            ma_positions.append(positions[action.cpu().numpy()].mean())
 
             next_obs, reward, terminations, truncations, infos = env.step(
                 action.cpu().numpy())
