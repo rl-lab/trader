@@ -288,10 +288,11 @@ if __name__ == "__main__":
                 loss.backward()
                 optimizer.step()
 
-        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - \
-            np.var(y_true - y_pred) / var_y
+                wandb.log({
+                    "pg_loss": pg_loss.item(),
+                    "v_loss": v_loss.item(),
+                    "entropy": entropy_loss.item(),
+                })
 
 
 # env.save_for_render()
