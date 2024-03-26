@@ -7,10 +7,13 @@ import time
 from torch.distributions.categorical import Categorical
 from gym_trading_env.environments import TradingEnv, MultiDatasetTradingEnv
 import gymnasium as gym
+from collections import deque
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+import wandb
 
 
 def preprocess_function(df):
@@ -20,7 +23,7 @@ def preprocess_function(df):
     df["feature_open"] = df["open"] / df["close"]
     df["feature_high"] = df["high"] / df["close"]
     df["feature_low"] = df["low"] / df["close"]
-    df["feature_volume"] = df["amount"] / df["amount"]
+    df["feature_volume"] = df["amount"].pct_change()
     df.dropna(inplace=True)
     return df
 
@@ -53,9 +56,8 @@ def make_env():
         verbose=0,
     )
 
-    env.add_metric('Position Changes', lambda history: np.sum(
-        np.diff(history['position']) != 0))
-    env.add_metric('Episode Lenght', lambda history: len(history['position']))
+    env.add_metric(
+        'avg_position', lambda history: np.mean(history['position']))
     return env
 
 
@@ -143,6 +145,14 @@ if __name__ == "__main__":
                     agent.lstm.hidden_size).to(device),
     )  # hidden and cell states (see https://youtu.be/8HyCNIVRbSU)
 
+
+    ma_rewards = deque(maxlen=100)
+    pbar = tqdm(total=100*1000*1000)
+
+    wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
+    wandb.init(project="trader")
+
+    last_wandb_time = time.time()
     while True:
         initial_lstm_state = (
             next_lstm_state[0].clone(), next_lstm_state[1].clone())
@@ -163,6 +173,15 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(
                 device), torch.Tensor(next_done).to(device)
+            pbar.update(num_envs)
+
+            if "final_info" in infos:
+                for info in infos["final_info"]:
+                    ma_rewards.append(info['reward'])
+                    pbar.set_description(f"reward: {np.mean(ma_rewards)}")
+                if time.time() - last_wandb_time > 5:
+                    last_wandb_time = time.time()
+                    wandb.log({"reward": np.mean(ma_rewards)})
 
         # bootstrap value if not done
         Gamma = 0.99
