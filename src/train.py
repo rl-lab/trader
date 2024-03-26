@@ -28,7 +28,7 @@ def preprocess_function(df):
     return df
 
 
-num_stocks = 10
+num_stocks = 300
 dfs = [preprocess_function(pd.read_csv(each, parse_dates=["time"], index_col="time"))
        for each in tqdm(glob("data/*.csv.gz")[:num_stocks], desc="reading datasets")]
 
@@ -149,8 +149,8 @@ if __name__ == "__main__":
     ma_positions = deque(maxlen=100)
     pbar = tqdm(total=100*1000*1000)
 
-    # wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
-    # wandb.init(project="trader")
+    wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
+    wandb.init(project="trader")
 
     last_wandb_time = time.time()
     while True:
