@@ -145,8 +145,8 @@ if __name__ == "__main__":
                     agent.lstm.hidden_size).to(device),
     )  # hidden and cell states (see https://youtu.be/8HyCNIVRbSU)
 
-
     ma_rewards = deque(maxlen=100)
+    ma_positions = deque(maxlen=100)
     pbar = tqdm(total=100*1000*1000)
 
     wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
@@ -166,6 +166,7 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
+            ma_positions.append(actions.mean().item())
 
             next_obs, reward, terminations, truncations, infos = env.step(
                 action.cpu().numpy())
@@ -178,10 +179,14 @@ if __name__ == "__main__":
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     ma_rewards.append(info['reward'])
-                    pbar.set_description(f"reward: {np.mean(ma_rewards)}")
+                    pbar.set_description(
+                        f"reward: {np.mean(ma_rewards)} positions: {np.mean(ma_positions)}")
                 if time.time() - last_wandb_time > 5:
                     last_wandb_time = time.time()
-                    wandb.log({"reward": np.mean(ma_rewards)})
+                    wandb.log({
+                        "reward": np.mean(ma_rewards),
+                        "positions": np.mean(ma_positions)
+                    })
 
         # bootstrap value if not done
         Gamma = 0.99
