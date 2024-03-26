@@ -8,6 +8,7 @@ from torch.distributions.categorical import Categorical
 from gym_trading_env.environments import TradingEnv, MultiDatasetTradingEnv
 import gymnasium as gym
 from collections import deque
+import pickle
 
 import torch
 import torch.nn as nn
@@ -25,6 +26,7 @@ def preprocess_function(df):
     df["feature_low"] = df["low"] / df["close"]
     df["feature_volume"] = df["amount"].pct_change()
     df.dropna(inplace=True)
+    df = df[~df.isin([np.inf, -np.inf]).any(axis=1)]
     return df
 
 
@@ -160,6 +162,9 @@ if __name__ == "__main__":
         for step in range(0, T):
             obs[step] = next_obs
             dones[step] = next_done
+            # with open('arrays.pkl', 'wb') as f:
+            #     pickle.dump((next_obs.cpu().numpy(), next_lstm_state[0].cpu().numpy(), next_lstm_state[1].cpu().numpy()), f)
+
             with torch.no_grad():
                 action, logprob, _, value, next_lstm_state = agent.get_action_and_value(
                     next_obs, next_lstm_state, next_done)
