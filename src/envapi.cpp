@@ -1,3 +1,4 @@
+#include <iostream>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -70,11 +71,17 @@ public:
     for (int i = 0; i < bs_; i++) {
       auto [code, start, cursor, position, cost] = status_[i];
       cursor++;
-      position += actions[i] * amt_;
-      auto spent = actions[i] * ctx_[code].first[5 * cursor + 2] * amt_;
+      auto spent = actions[i] * ctx_[code].first[5 * (start + cursor) + 2] *
+                   std::min(1 - position, amt_);
+      position = std::min(1.f, position + actions[i] * amt_);
+#if 0
+      std::cout << code << " " << actions[i] << " cursor:" << start + cursor
+                << " " << ctx_[code].first[5 * (start + cursor) + 2] << " "
+                << position << std::endl;
+#endif
       done[i] = (cursor >= T_) || position >= 1;
       if (cursor >= T_ && position < 1) {
-        spent += ctx_[code].first[5 * cursor + 2] * (1 - position);
+        spent += ctx_[code].first[5 * (start + cursor) + 2] * (1 - position);
         position = 1;
       }
       cost += spent;
@@ -84,11 +91,21 @@ public:
         size_t step = T_ / m;
         float base = 0;
         float po = 0;
-        for (size_t k = 0; k < m - 1; ++i) {
+        for (size_t k = 0; k < m - 1; ++k) {
           base += amt_ * ctx_[code].first[5 * (start + k * step) + 2];
           po += amt_;
+#if 0
+          std::cout << code << " buy at " << start + k * step << " "
+                    << ctx_[code].first[5 * (start + k * step) + 2] << " " << po
+                    << std::endl;
+#endif
         }
         base += (1 - po) * ctx_[code].first[5 * (start + T_) + 2];
+#if 0
+        std::cout << "clean " << 1 - po << " "
+                  << ctx_[code].first[5 * (start + T_) + 2] << ":" << cost
+                  << "/" << base << std::endl;
+#endif
         reward[i] = cost / base - 1;
 
         auto ob = ResetImpl(i);
