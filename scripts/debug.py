@@ -7,6 +7,9 @@ import pandas as pd
 from glob import glob
 import random
 
+np.set_printoptions(edgeitems=30, linewidth=1000,
+                    formatter=dict(float=lambda x: "%.3g" % x))
+
 
 def preprocess_function(df):
     df.sort_index(inplace=True)
@@ -24,7 +27,8 @@ def preprocess_function(df):
 if __name__ == "__main__":
     sys.path.append("build")
     import trade_env
-    vec_trade = trade_env.VecTrade(5, 128)
+    # num_feature, bs, max_timestep
+    vec_trade = trade_env.VecTrade(5, 128, 48)
     instruments = glob("data/*.csv.gz")
     ins = random.choice(instruments)
     df = preprocess_function(pd.read_csv(
@@ -37,3 +41,5 @@ if __name__ == "__main__":
 
     vec_trade.Load(code, df[raw_names].values, df[fea_names].values)
 
+    obs = vec_trade.Reset()
+    print(obs)
