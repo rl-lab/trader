@@ -28,7 +28,7 @@ if __name__ == "__main__":
     sys.path.append("build")
     import trade_env
     # num_feature, bs, max_timestep
-    vec_trade = trade_env.VecTrade(5, 128, 48)
+    vec_trade = trade_env.VecTrade(5, 1, 48 * 2, 0.05)
     instruments = glob("data/*.csv.gz")
     ins = random.choice(instruments)
     df = preprocess_function(pd.read_csv(
