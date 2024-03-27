@@ -5,3 +5,4 @@ wandb/
 build/
 compile_commands.json
 .clangd/
+data/
