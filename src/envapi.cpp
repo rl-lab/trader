@@ -1,42 +1,29 @@
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
-
-#define STRINGIFY(x) #x
-#define MACRO_STRINGIFY(x) STRINGIFY(x)
-
-int add(int i, int j) { return i + j; }
+#include <pybind11/stl.h>
+#include <string>
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(cmake_example, m) {
-  m.doc() = R"pbdoc(
-        Pybind11 example plugin
-        -----------------------
+class vec_trade_t {
+public:
+  vec_trade_t(int n_feature) : n_feature_(n_feature) {}
+  void Load(std::string name,
+            py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
 
-        .. currentmodule:: cmake_example
+    int64_t n = arr.size();
+    ctx[name] = std::vector<float>(n);
+    std::memcpy(ctx[name].data(), arr.data(), n * sizeof(float));
+  }
 
-        .. autosummary::
-           :toctree: _generate
+  int n_feature_;
+  std::map<std::string, std::vector<float>> ctx;
+};
 
-           add
-           subtract
-    )pbdoc";
+namespace py = pybind11;
 
-  m.def("add", &add, R"pbdoc(
-        Add two numbers
-
-        Some other explanation about the add function.
-    )pbdoc");
-
-  m.def(
-      "subtract", [](int i, int j) { return i - j; }, R"pbdoc(
-        Subtract two numbers
-
-        Some other explanation about the subtract function.
-    )pbdoc");
-
-#ifdef VERSION_INFO
-  m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);
-#else
-  m.attr("__version__") = "dev";
-#endif
+PYBIND11_MODULE(trade_env, m) {
+  py::class_<vec_trade_t>(m, "VecTrade")
+      .def(py::init<int>())
+      .def("Load", &vec_trade_t::Load);
 }

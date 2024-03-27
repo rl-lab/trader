@@ -4,3 +4,4 @@ render_logs/
 wandb/
 build/
 compile_commands.json
+.clangd/
