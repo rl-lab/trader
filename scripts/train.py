@@ -37,10 +37,11 @@ dfs = [preprocess_function(pd.read_csv(each, parse_dates=["time"], index_col="ti
 
 def reward_function(history):
     # log (p_t / p_t-1 )
-    return np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
+    return 1000 * np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
 
 
-positions = np.array([-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2])
+# positions = np.array([-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2])
+positions = np.array([0, 0.25, 0.5, 0.75, 1])
 
 
 def make_env():
@@ -50,7 +51,7 @@ def make_env():
         windows=None,
         positions=positions.tolist(),
         initial_position='random',
-        trading_fees=0.01/100,
+        trading_fees=0.0,
         borrow_interest_rate=0.0003/100,
         reward_function=reward_function,
         portfolio_initial_value=1000,
