@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
     instruments = glob("data/*.csv.gz")
     ins = random.choice(instruments)
-    for ins in tqdm(instruments[:10]):
+    for ins in tqdm(instruments):
         df = preprocess_function(pd.read_csv(
             ins, parse_dates=["time"], index_col="time"))
 
@@ -136,14 +136,17 @@ if __name__ == "__main__":
     )
 
     ma_rewards = deque(maxlen=100)
+    ma_epilen = deque(maxlen=100)
     pbar = tqdm(total=100*1000*1000)
 
     last_wandb_time = time.time()
+    traj_counter = np.zeros(num_envs)
     while True:
         initial_lstm_state = (
             next_lstm_state[0].clone(), next_lstm_state[1].clone())
 
         epi_rewards = []
+        epi_len = []
         for step in range(0, T):
             obs[step] = next_obs
             dones[step] = next_done
@@ -160,13 +163,19 @@ if __name__ == "__main__":
                 action.cpu().numpy().tolist())
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             epi_rewards += reward[next_done == 1].tolist()
+            epi_len += traj_counter[next_done == 1].tolist()
+            traj_counter = (traj_counter + 1) * (1 - next_done)
 
             next_obs, next_done = torch.Tensor(next_obs).to(
                 device), torch.Tensor(next_done).to(device)
 
         ma_rewards.append(np.mean(epi_rewards))
+        ma_epilen.append(np.mean(epi_len))
         pbar.set_description(f"reward: {np.mean(ma_rewards)}")
-        wandb.log({"reward": np.mean(ma_rewards)})
+        wandb.log({
+            "reward": np.mean(ma_rewards),
+            "trajlen": np.mean(ma_epilen),
+        })
         pbar.update(num_envs * T)
 
         # bootstrap value if not done
@@ -263,7 +272,7 @@ if __name__ == "__main__":
                         ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - 0.01 * entropy_loss + v_loss
+                loss = pg_loss - 0.001 * entropy_loss + v_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -271,7 +280,8 @@ if __name__ == "__main__":
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        explained_var = np.nan if var_y == 0 else 1 - \
+            np.var(y_true - y_pred) / var_y
 
         wandb.log({
             "pg_loss": pg_loss.item(),
