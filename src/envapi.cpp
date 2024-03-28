@@ -35,6 +35,7 @@ public:
                           ctx_[code].second.begin() +
                               (1 + cursor) * n_feature_);
     ob.push_back(position);
+    ob.push_back(static_cast<float>(cursor - start) / T_);
     return ob;
   }
 
@@ -51,7 +52,7 @@ public:
   }
 
   py::array_t<float> /*obs*/ Reset() {
-    int d_obs = n_feature_ + 1;
+    int d_obs = n_feature_ + 2;
     std::vector<float> obs(bs_ * d_obs);
     for (int i = 0; i < bs_; i++) {
       auto ob = ResetImpl(i);
@@ -62,7 +63,7 @@ public:
 
   std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<int>>
   Step(std::vector<int> actions) {
-    int d_obs = n_feature_ + 1;
+    int d_obs = n_feature_ + 2;
 
     std::vector<float> obs(bs_ * d_obs);
     std::vector<float> reward(bs_);
@@ -106,7 +107,7 @@ public:
                   << ctx_[code].first[5 * (start + T_) + 2] << ":" << cost
                   << "/" << base << std::endl;
 #endif
-        reward[i] = cost / base - 1;
+        reward[i] = (1 - cost / base) * 100;
 
         auto ob = ResetImpl(i);
         std::copy(ob.begin(), ob.end(), obs.data() + i * d_obs);
