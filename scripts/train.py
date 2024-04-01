@@ -19,13 +19,16 @@ import wandb
 np.set_printoptions(edgeitems=30, linewidth=1000,
                     formatter=dict(float=lambda x: "%.3g" % x))
 
-wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
-wandb.init(project="trader")
+use_wandb = False
+if use_wandb:
+    wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
+    wandb.init(project="trader")
 
 
-def preprocess_function(df):
+def preprocess_function(df, seperate="2022-12-31"):
     df.sort_index(inplace=True)
     df.drop_duplicates(inplace=True)
+    given_date = pd.to_datetime('2023-01-01')
     df["feature_close"] = df["close"].pct_change()
     df["feature_open"] = df["open"] / df["close"]
     df["feature_high"] = df["high"] / df["close"]
@@ -33,7 +36,7 @@ def preprocess_function(df):
     df["feature_volume"] = df["amount"].pct_change()
     df.dropna(inplace=True)
     df = df[~df.isin([np.inf, -np.inf]).any(axis=1)]
-    return df
+    return df[df.index < given_date], df[df.index >= given_date]
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -100,19 +103,31 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 128
     T = 256
+    MAX_TRADE_STEPS = 12 * 4 * 2  # two days
+    AMT_EACH_STEP = 0.05  # buy this fixed position each step
+
     raw_names = ['open', 'high', 'low', 'close', 'volume']
     fea_names = ['feature_open', 'feature_high',
                  'feature_low', 'feature_close', 'feature_volume']
-    env = trade_env.VecTrade(len(fea_names), num_envs, 48 * 2, 0.05)
+
+    # create a custom data env with batch operation
+    train_env = trade_env.VecTrade(
+        len(fea_names), num_envs, MAX_TRADE_STEPS, AMT_EACH_STEP)
+    test_env = trade_env.VecTrade(
+        len(fea_names), num_envs, MAX_TRADE_STEPS, AMT_EACH_STEP)
 
     instruments = glob("data/*.csv.gz")
     ins = random.choice(instruments)
     for ins in tqdm(instruments):
-        df = preprocess_function(pd.read_csv(
-            ins, parse_dates=["time"], index_col="time"))
+        traindf, testdf = preprocess_function(pd.read_csv(
+            ins, parse_dates=["time"], index_col="time"), seperate="2022-12-31")
 
-        code = df["code"][0]
-        env.Load(code, df[raw_names].values, df[fea_names].values)
+        code = traindf["code"][0]
+        # load the pandas df data into CPP vector<float>, for fast operations
+        if len(traindf) > MAX_TRADE_STEPS * 10:
+            train_env.Load(code, traindf[raw_names].values, traindf[fea_names].values)
+        if len(testdf) > MAX_TRADE_STEPS * 10:
+            test_env.Load(code, testdf[raw_names].values, testdf[fea_names].values)
 
     agent = Agent(num_actions=2).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=2.5e-4, eps=1e-5)
@@ -172,10 +187,11 @@ if __name__ == "__main__":
         ma_rewards.append(np.mean(epi_rewards))
         ma_epilen.append(np.mean(epi_len))
         pbar.set_description(f"reward: {np.mean(ma_rewards)}")
-        wandb.log({
-            "reward": np.mean(ma_rewards),
-            "trajlen": np.mean(ma_epilen),
-        })
+        if use_wandb:
+            wandb.log({
+                "reward": np.mean(ma_rewards),
+                "trajlen": np.mean(ma_epilen),
+            })
         pbar.update(num_envs * T)
 
         # bootstrap value if not done
