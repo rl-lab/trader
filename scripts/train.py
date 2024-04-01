@@ -5,7 +5,6 @@ import random
 import pickle
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
 from glob import glob
 from tqdm import tqdm
@@ -16,45 +15,70 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 
+import talib
 import wandb
 
 np.set_printoptions(edgeitems=30, linewidth=1000,
                     formatter=dict(float=lambda x: "%.3g" % x))
 pd.set_option('display.float_format', '{:.2f}'.format)
 
-use_wandb = False
+use_wandb = True
 if use_wandb:
     wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
     wandb.init(project="trader")
 
-
-# custom your own technical indicators
-CustomStrategy = ta.Strategy(
-    name="Momo and Volatility",
-    description="SMA 50,200, BBANDS, RSI, MACD and Volume SMA 20",
-    ta=[
-        {"kind": "sma", "length": 50},
-        {"kind": "sma", "length": 200},
-        {"kind": "bbands", "length": 20},
-        {"kind": "rsi"},
-        {"kind": "macd", "fast": 8, "slow": 21},
-        {"kind": "sma", "close": "volume", "length": 20, "prefix": "VOLUME"},
-    ]
-)
+fea_names = ["feature_close", "feature_open",
+             "feature_high", "feature_low", "feature_volume",
+             "SMA_50", "SMA_200", "BB_UPPER", "BB_MIDDLE", "BB_LOWER",
+             "RSI_14", "MACD", "MACD_SIGNAL", "EMA_20", "ATR_14",
+             "CCI_20", "Aroon_Osc"]
 
 
 def preprocess_function(df, seperate="2022-12-31"):
     df.sort_index(inplace=True)
     df.drop_duplicates(inplace=True)
-    df.ta.strategy(CustomStrategy)
     given_date = pd.to_datetime('2023-01-01')
+    df = df.astype('double')
+
+    # normalize price, not sure whether to do this
+    df["close"] /= df["close"][0]
+    df["open"] /= df["open"][0]
+    df["high"] /= df["high"][0]
+    df["low"] /= df["low"][0]
+
     df["feature_close"] = df["close"].pct_change()
     df["feature_open"] = df["open"] / df["close"]
     df["feature_high"] = df["high"] / df["close"]
     df["feature_low"] = df["low"] / df["close"]
     df["feature_volume"] = df["amount"].pct_change()
+
+    df['SMA_50'] = talib.SMA(df['close'].values, timeperiod=50)
+    df['SMA_200'] = talib.SMA(df['close'].values, timeperiod=200)
+
+    upper_band, middle_band, lower_band = talib.BBANDS(
+        df['close'].values, timeperiod=20)
+    df['BB_UPPER'] = upper_band
+    df['BB_MIDDLE'] = middle_band
+    df['BB_LOWER'] = lower_band
+
+    df['RSI_14'] = talib.RSI(df['close'].values, timeperiod=14)
+
+    macd, signal, _ = talib.MACD(
+        df['close'].values, fastperiod=8, slowperiod=21, signalperiod=9)
+    df['MACD'] = macd
+    df['MACD_SIGNAL'] = signal
+
+    df['EMA_20'] = talib.EMA(df['close'].values, timeperiod=20)
+    df['ATR_14'] = talib.ATR(
+        df['high'].values, df['low'].values, df['close'].values, timeperiod=14)
+    df['CCI_20'] = talib.CCI(
+        df['high'].values, df['low'].values, df['close'].values, timeperiod=20)
+    df['Aroon_Osc'] = talib.AROONOSC(
+        df['high'].values, df['low'].values, timeperiod=14)
+
     df.dropna(inplace=True)
     df = df[~df.isin([np.inf, -np.inf]).any(axis=1)]
+    df = df.astype('float')
     return df[df.index < given_date], df[df.index >= given_date]
 
 
@@ -65,26 +89,26 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, num_actions):
+    def __init__(self, num_actions, num_features, dim=128):
         super().__init__()
         self.network = nn.Sequential(
-            layer_init(nn.Linear(7, 128)),
+            layer_init(nn.Linear(num_features, dim)),
             nn.ReLU(),
-            layer_init(nn.Linear(128, 128)),
+            layer_init(nn.Linear(dim, dim)),
             nn.ReLU(),
         )
-        self.lstm = nn.LSTM(128, 128)
+        self.lstm = nn.LSTM(dim, dim)
         for name, param in self.lstm.named_parameters():
             if "bias" in name:
                 nn.init.constant_(param, 0)
             elif "weight" in name:
                 nn.init.orthogonal_(param, 1.0)
         self.actor = layer_init(
-            nn.Linear(128, num_actions), std=0.01)
-        self.critic = layer_init(nn.Linear(128, 1), std=1)
+            nn.Linear(dim, num_actions), std=0.01)
+        self.critic = layer_init(nn.Linear(dim, 1), std=1)
 
     def get_states(self, x, lstm_state, done):
-        hidden = self.network(x / 255.0)
+        hidden = self.network(x)
 
         # LSTM logic
         batch_size = lstm_state[0].shape[1]
@@ -127,10 +151,6 @@ if __name__ == "__main__":
 
     raw_names = ['open', 'high', 'low', 'close', 'volume']
 
-    fea_names = CustomStrategy.features + [
-        'feature_open', 'feature_high', 'feature_low',
-        'feature_close', 'feature_volume']
-
     # create a custom data env with batch operation
     train_env = trade_env.VecTrade(
         len(fea_names), num_envs, MAX_TRADE_STEPS, AMT_EACH_STEP)
@@ -138,10 +158,11 @@ if __name__ == "__main__":
         len(fea_names), num_envs, MAX_TRADE_STEPS, AMT_EACH_STEP)
 
     instruments = glob("data/*.csv.gz")
-    ins = random.choice(instruments)
     for i, ins in enumerate(tqdm(instruments)):
-        traindf, testdf = preprocess_function(pd.read_csv(
-            ins, parse_dates=["time"], index_col="time"), seperate="2022-12-31")
+        df = pd.read_csv(ins, parse_dates=["time"], index_col="time")
+        code = df["code"][0]
+        df.drop("code", axis=1, inplace=True)
+        traindf, testdf = preprocess_function(df, seperate="2022-12-31")
 
         if i == 0:
             print("example data")
@@ -149,18 +170,19 @@ if __name__ == "__main__":
 
         # load the pandas df data into CPP vector<float>, for fast operations
         if len(traindf) > MAX_TRADE_STEPS * 10:
-            code = traindf["code"][0]
             train_env.Load(
                 code, traindf[raw_names].values, traindf[fea_names].values)
         if len(testdf) > MAX_TRADE_STEPS * 10:
-            code = testdf["code"][0]
             test_env.Load(code, testdf[raw_names].values,
                           testdf[fea_names].values)
 
-    agent = Agent(num_actions=2).to(device)
+    # num_features = len(fea_names) + 2, because env always append a
+    # position and a time-left feature
+    agent = Agent(num_actions=2, num_features=len(fea_names) + 2).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=2.5e-4, eps=1e-5)
 
-    next_obs = env.Reset()
+    # train part
+    next_obs = train_env.Reset()
     next_obs = torch.Tensor(next_obs).to(device)
 
     obs = torch.zeros((T, *next_obs.shape)).to(device)
@@ -178,13 +200,26 @@ if __name__ == "__main__":
                     agent.lstm.hidden_size).to(device),
     )
 
+    test_next_obs = test_env.Reset()
+    test_next_obs = torch.Tensor(test_next_obs).to(device)
+    test_next_done = torch.zeros(num_envs).to(device)
+    test_next_lstm_state = (
+        torch.zeros(agent.lstm.num_layers, num_envs,
+                    agent.lstm.hidden_size).to(device),
+        torch.zeros(agent.lstm.num_layers, num_envs,
+                    agent.lstm.hidden_size).to(device),
+    )
+
     ma_rewards = deque(maxlen=100)
+    test_rewards = deque(maxlen=100)
+    last_test_time = 0
     ma_epilen = deque(maxlen=100)
     pbar = tqdm(total=100*1000*1000)
 
     last_wandb_time = time.time()
     traj_counter = np.zeros(num_envs)
-    while True:
+
+    for learn_step in range(1000 * 1000):
         initial_lstm_state = (
             next_lstm_state[0].clone(), next_lstm_state[1].clone())
 
@@ -202,7 +237,7 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
-            next_obs, reward, next_done = env.Step(
+            next_obs, reward, next_done = train_env.Step(
                 action.cpu().numpy().tolist())
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             epi_rewards += reward[next_done == 1].tolist()
@@ -214,7 +249,8 @@ if __name__ == "__main__":
 
         ma_rewards.append(np.mean(epi_rewards))
         ma_epilen.append(np.mean(epi_len))
-        pbar.set_description(f"reward: {np.mean(ma_rewards)}")
+        pbar.set_description(
+            f"train reward: {np.mean(ma_rewards)}, test reward: {np.mean(test_rewards)}")
         if use_wandb:
             wandb.log({
                 "reward": np.mean(ma_rewards),
@@ -284,7 +320,6 @@ if __name__ == "__main__":
                 ratio = logratio.exp()
 
                 with torch.no_grad():
-                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
                     old_approx_kl = (-logratio).mean()
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs += [((ratio - 1.0).abs() >
@@ -327,9 +362,36 @@ if __name__ == "__main__":
         explained_var = np.nan if var_y == 0 else 1 - \
             np.var(y_true - y_pred) / var_y
 
-        wandb.log({
-            "pg_loss": pg_loss.item(),
-            "v_loss": v_loss.item(),
-            "entropy": entropy_loss.item(),
-            "explained_variance": explained_var,
-        })
+        if use_wandb:
+            wandb.log({
+                "pg_loss": pg_loss.item(),
+                "v_loss": v_loss.item(),
+                "entropy": entropy_loss.item(),
+                "explained_variance": explained_var,
+            })
+
+        if time.time() - last_test_time > 300:
+            # test every 5 min, T * 100 approx use 40 seconds on V100
+            agent.eval()
+
+            last_test_time = time.time()
+            epi_rewards = []
+            epi_len = []
+            for step in tqdm(range(0, T * 100)):
+                with torch.no_grad():
+                    action, logprob, _, value, next_lstm_state = agent.get_action_and_value(
+                        test_next_obs, test_next_lstm_state, test_next_done)
+                test_next_obs, reward, test_next_done = train_env.Step(
+                    action.cpu().numpy().tolist())
+                epi_rewards += reward[test_next_done == 1].tolist()
+
+                test_next_obs, test_next_done = torch.Tensor(test_next_obs).to(
+                    device), torch.Tensor(test_next_done).to(device)
+
+            test_rewards.append(np.mean(epi_rewards))
+            if use_wandb:
+                wandb.log({
+                    "test_reward": np.mean(test_rewards),
+                })
+            agent.train()
+
