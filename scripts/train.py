@@ -1,20 +1,26 @@
-from gym_trading_env.renderer import Renderer
+import sys
+import time
+import random
+
+import pickle
+import numpy as np
+import pandas as pd
 from glob import glob
 from tqdm import tqdm
-import pandas as pd
-import numpy as np
-import time
-from torch.distributions.categorical import Categorical
-from gym_trading_env.environments import TradingEnv, MultiDatasetTradingEnv
-import gymnasium as gym
 from collections import deque
-import pickle
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.distributions.categorical import Categorical
 
 import wandb
+
+np.set_printoptions(edgeitems=30, linewidth=1000,
+                    formatter=dict(float=lambda x: "%.3g" % x))
+
+wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
+wandb.init(project="trader")
 
 
 def preprocess_function(df):
@@ -28,40 +34,6 @@ def preprocess_function(df):
     df.dropna(inplace=True)
     df = df[~df.isin([np.inf, -np.inf]).any(axis=1)]
     return df
-
-
-num_stocks = 300
-dfs = [preprocess_function(pd.read_csv(each, parse_dates=["time"], index_col="time"))
-       for each in tqdm(glob("data/*.csv.gz")[:num_stocks], desc="reading datasets")]
-
-
-def reward_function(history):
-    # log (p_t / p_t-1 )
-    return 1000 * np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
-
-
-# positions = np.array([-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.5, 2])
-positions = np.array([0, 0.25, 0.5, 0.75, 1])
-
-
-def make_env():
-    env = MultiDatasetTradingEnv(
-        name="hsi300",
-        datasets=dfs,
-        windows=None,
-        positions=positions.tolist(),
-        initial_position='random',
-        trading_fees=0.0,
-        borrow_interest_rate=0.0003/100,
-        reward_function=reward_function,
-        portfolio_initial_value=1000,
-        max_episode_duration=400,
-        verbose=0,
-    )
-
-    env.add_metric(
-        'avg_position', lambda history: np.mean(history['position']))
-    return env
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -123,14 +95,29 @@ class Agent(nn.Module):
 
 
 if __name__ == "__main__":
-    num_envs = 16
-    T = 200
+    sys.path.append("build")
+    import trade_env
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = gym.vector.SyncVectorEnv([make_env] * num_envs)
-    agent = Agent(num_actions=len(positions)).to(device)
+    num_envs = 128
+    T = 256
+    raw_names = ['open', 'high', 'low', 'close', 'volume']
+    fea_names = ['feature_open', 'feature_high',
+                 'feature_low', 'feature_close', 'feature_volume']
+    env = trade_env.VecTrade(len(fea_names), num_envs, 48 * 2, 0.05)
+
+    instruments = glob("data/*.csv.gz")
+    ins = random.choice(instruments)
+    for ins in tqdm(instruments):
+        df = preprocess_function(pd.read_csv(
+            ins, parse_dates=["time"], index_col="time"))
+
+        code = df["code"][0]
+        env.Load(code, df[raw_names].values, df[fea_names].values)
+
+    agent = Agent(num_actions=2).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=2.5e-4, eps=1e-5)
 
-    next_obs, info = env.reset()
+    next_obs = env.Reset()
     next_obs = torch.Tensor(next_obs).to(device)
 
     obs = torch.zeros((T, *next_obs.shape)).to(device)
@@ -146,20 +133,20 @@ if __name__ == "__main__":
                     agent.lstm.hidden_size).to(device),
         torch.zeros(agent.lstm.num_layers, num_envs,
                     agent.lstm.hidden_size).to(device),
-    )  # hidden and cell states (see https://youtu.be/8HyCNIVRbSU)
+    )
 
     ma_rewards = deque(maxlen=100)
-    ma_positions = deque(maxlen=100)
+    ma_epilen = deque(maxlen=100)
     pbar = tqdm(total=100*1000*1000)
 
-    wandb.login(key="585ae2121002eef020cd686fede2bce79a15faf3")
-    wandb.init(project="trader")
-
     last_wandb_time = time.time()
+    traj_counter = np.zeros(num_envs)
     while True:
         initial_lstm_state = (
             next_lstm_state[0].clone(), next_lstm_state[1].clone())
 
+        epi_rewards = []
+        epi_len = []
         for step in range(0, T):
             obs[step] = next_obs
             dones[step] = next_done
@@ -172,27 +159,24 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
-            ma_positions.append(positions[action.cpu().numpy()].mean())
-
-            next_obs, reward, terminations, truncations, infos = env.step(
-                action.cpu().numpy())
-            next_done = np.logical_or(terminations, truncations)
+            next_obs, reward, next_done = env.Step(
+                action.cpu().numpy().tolist())
             rewards[step] = torch.tensor(reward).to(device).view(-1)
+            epi_rewards += reward[next_done == 1].tolist()
+            epi_len += traj_counter[next_done == 1].tolist()
+            traj_counter = (traj_counter + 1) * (1 - next_done)
+
             next_obs, next_done = torch.Tensor(next_obs).to(
                 device), torch.Tensor(next_done).to(device)
-            pbar.update(num_envs)
 
-            if "final_info" in infos:
-                for info in infos["final_info"]:
-                    ma_rewards.append(info['reward'])
-                    pbar.set_description(
-                        f"reward: {np.mean(ma_rewards)} positions: {np.mean(ma_positions)}")
-                if time.time() - last_wandb_time > 5:
-                    last_wandb_time = time.time()
-                    wandb.log({
-                        "reward": np.mean(ma_rewards),
-                        "positions": np.mean(ma_positions)
-                    })
+        ma_rewards.append(np.mean(epi_rewards))
+        ma_epilen.append(np.mean(epi_len))
+        pbar.set_description(f"reward: {np.mean(ma_rewards)}")
+        wandb.log({
+            "reward": np.mean(ma_rewards),
+            "trajlen": np.mean(ma_epilen),
+        })
+        pbar.update(num_envs * T)
 
         # bootstrap value if not done
         Gamma = 0.99
@@ -219,9 +203,9 @@ if __name__ == "__main__":
             returns = advantages + values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,) + env.single_observation_space.shape)
+        b_obs = obs.reshape((-1, len(fea_names) + 2))
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + env.single_action_space.shape)
+        b_actions = actions.reshape((-1,))
         b_dones = dones.reshape(-1)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
@@ -231,7 +215,7 @@ if __name__ == "__main__":
 
         # Optimizing the policy and value network
         num_minibatches = 8
-        update_epochs = 4
+        update_epochs = 2
         envsperbatch = num_envs // num_minibatches
         envinds = np.arange(num_envs)
         flatinds = np.arange(T * num_envs).reshape(T, num_envs)
@@ -288,19 +272,20 @@ if __name__ == "__main__":
                         ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - 0.01 * entropy_loss + v_loss
+                loss = pg_loss - 0.001 * entropy_loss + v_loss
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                wandb.log({
-                    "pg_loss": pg_loss.item(),
-                    "v_loss": v_loss.item(),
-                    "entropy": entropy_loss.item(),
-                })
+        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+        var_y = np.var(y_true)
+        explained_var = np.nan if var_y == 0 else 1 - \
+            np.var(y_true - y_pred) / var_y
 
-
-# env.save_for_render()
-# renderer = Renderer(render_logs_dir="render_logs")
-# renderer.run()
+        wandb.log({
+            "pg_loss": pg_loss.item(),
+            "v_loss": v_loss.item(),
+            "entropy": entropy_loss.item(),
+            "explained_variance": explained_var,
+        })
