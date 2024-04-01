@@ -5,6 +5,8 @@ import random
 import pickle
 import numpy as np
 import pandas as pd
+import pandas_ta as ta
+
 from glob import glob
 from tqdm import tqdm
 from collections import deque
@@ -18,6 +20,7 @@ import wandb
 
 np.set_printoptions(edgeitems=30, linewidth=1000,
                     formatter=dict(float=lambda x: "%.3g" % x))
+pd.set_option('display.float_format', '{:.2f}'.format)
 
 use_wandb = False
 if use_wandb:
@@ -25,9 +28,25 @@ if use_wandb:
     wandb.init(project="trader")
 
 
+# custom your own technical indicators
+CustomStrategy = ta.Strategy(
+    name="Momo and Volatility",
+    description="SMA 50,200, BBANDS, RSI, MACD and Volume SMA 20",
+    ta=[
+        {"kind": "sma", "length": 50},
+        {"kind": "sma", "length": 200},
+        {"kind": "bbands", "length": 20},
+        {"kind": "rsi"},
+        {"kind": "macd", "fast": 8, "slow": 21},
+        {"kind": "sma", "close": "volume", "length": 20, "prefix": "VOLUME"},
+    ]
+)
+
+
 def preprocess_function(df, seperate="2022-12-31"):
     df.sort_index(inplace=True)
     df.drop_duplicates(inplace=True)
+    df.ta.strategy(CustomStrategy)
     given_date = pd.to_datetime('2023-01-01')
     df["feature_close"] = df["close"].pct_change()
     df["feature_open"] = df["open"] / df["close"]
@@ -107,8 +126,10 @@ if __name__ == "__main__":
     AMT_EACH_STEP = 0.05  # buy this fixed position each step
 
     raw_names = ['open', 'high', 'low', 'close', 'volume']
-    fea_names = ['feature_open', 'feature_high',
-                 'feature_low', 'feature_close', 'feature_volume']
+
+    fea_names = CustomStrategy.features + [
+        'feature_open', 'feature_high', 'feature_low',
+        'feature_close', 'feature_volume']
 
     # create a custom data env with batch operation
     train_env = trade_env.VecTrade(
@@ -118,17 +139,23 @@ if __name__ == "__main__":
 
     instruments = glob("data/*.csv.gz")
     ins = random.choice(instruments)
-    for ins in tqdm(instruments):
+    for i, ins in enumerate(tqdm(instruments)):
         traindf, testdf = preprocess_function(pd.read_csv(
             ins, parse_dates=["time"], index_col="time"), seperate="2022-12-31")
+
+        if i == 0:
+            print("example data")
+            print(traindf[:10].transpose())
 
         # load the pandas df data into CPP vector<float>, for fast operations
         if len(traindf) > MAX_TRADE_STEPS * 10:
             code = traindf["code"][0]
-            train_env.Load(code, traindf[raw_names].values, traindf[fea_names].values)
+            train_env.Load(
+                code, traindf[raw_names].values, traindf[fea_names].values)
         if len(testdf) > MAX_TRADE_STEPS * 10:
             code = testdf["code"][0]
-            test_env.Load(code, testdf[raw_names].values, testdf[fea_names].values)
+            test_env.Load(code, testdf[raw_names].values,
+                          testdf[fea_names].values)
 
     agent = Agent(num_actions=2).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=2.5e-4, eps=1e-5)
