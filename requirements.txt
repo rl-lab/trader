@@ -7,3 +7,5 @@ ccxt
 nest_asyncio
 tqdm
 baostock
+pandas_ta
+ta-lib

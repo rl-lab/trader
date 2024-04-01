@@ -122,11 +122,12 @@ if __name__ == "__main__":
         traindf, testdf = preprocess_function(pd.read_csv(
             ins, parse_dates=["time"], index_col="time"), seperate="2022-12-31")
 
-        code = traindf["code"][0]
         # load the pandas df data into CPP vector<float>, for fast operations
         if len(traindf) > MAX_TRADE_STEPS * 10:
+            code = traindf["code"][0]
             train_env.Load(code, traindf[raw_names].values, traindf[fea_names].values)
         if len(testdf) > MAX_TRADE_STEPS * 10:
+            code = testdf["code"][0]
             test_env.Load(code, testdf[raw_names].values, testdf[fea_names].values)
 
     agent = Agent(num_actions=2).to(device)
