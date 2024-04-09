@@ -10,13 +10,32 @@ static std::random_device rd;
 static std::mt19937 gen(rd());
 
 using feature_t = std::pair<std::vector<float>, std::vector<float>>;
-/* code, start, cursor, position, costprice */
+
+/* status_t is the internal state of a stock for vec_trade_t,
+ * code, start, cursor, position, costprice */
 using status_t = std::tuple<std::string, int, int, float, float>;
 
 class vec_trade_t {
 public:
   vec_trade_t(int n_feature, int bs, int T, float amt)
       : n_feature_(n_feature), bs_(bs), T_(T), amt_(amt), status_(bs) {}
+  /* Load numpy data to cpp class vec_trade_t
+   * the RL agent operates a batch of states
+   * each state is a stock ohlcv + ta-lib features
+   * when Step() a env, trading steps of  all stocks +1
+   * if the trading period is finished, randomly select a new stock and start
+   * from time 0
+   *
+   * the data structure is like:
+   * ABCD... for stock, 01234 for the trading steps
+   *
+   * batch_idx0: A0 A1 A2 A3 A4 A5 F0 F1
+   * batch_idx1: C3 C4 C5 G0 G1 G2 G3 G4
+   * batch_idx2: D8 F0 F1 F2 F3 F4 H0 H1
+   * step        ^
+   * step           ^
+   * step              ^
+   */
   void Load(std::string name,
             py::array_t<float, py::array::c_style | py::array::forcecast> raw,
             py::array_t<float, py::array::c_style | py::array::forcecast> fea) {
@@ -29,6 +48,12 @@ public:
   };
 
   std::vector<float> ToObs(int i) {
+    /* a stock's state is
+     * cursor time's OHLCV
+     * other ta-lib features loaded from numpy
+     * a float for position
+     * a float for time left
+     */
     auto [code, start, cursor, position, cost] = status_[i];
 
     std::vector<float> ob(ctx_[code].second.begin() + cursor * n_feature_,
@@ -40,6 +65,9 @@ public:
   }
 
   std::vector<float> ResetImpl(int i) {
+    /* randomly select a Stock, randomly select a start time,
+     * set the cursor to 0, reset the postion and cost
+     */
     std::uniform_int_distribution<> dis(0, ctx_.size() - 1);
     int randomIndex = dis(gen);
     auto it = ctx_.begin();
@@ -52,6 +80,8 @@ public:
   }
 
   py::array_t<float> /*obs*/ Reset() {
+    /* Reset all `bs_` stocks, only used for initializing.
+     */
     int d_obs = n_feature_ + 2;
     std::vector<float> obs(bs_ * d_obs);
     for (int i = 0; i < bs_; i++) {
@@ -63,6 +93,20 @@ public:
 
   std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<int>>
   Step(std::vector<int> actions) {
+    /* the step function,
+     * input:
+     *  * actions, vector<int> of 0/1, acitons[idx]=1 for buy amt_ for the
+     * idx-th stock output:
+     *  * array<float> state, the next time step's state obs, if
+     *    after action, the traj finished(buy 100% or time's up) will Reset and
+     *    return the next initial state
+     *  * array<float> reward:
+     *    0 for non-terminal, relative price diff with TWAP (base in below
+     *    impl)for terminal
+     *  * array<int> done:
+     *    whether the traj is terminated, used for RL-alg
+     *
+     */
     int d_obs = n_feature_ + 2;
 
     std::vector<float> obs(bs_ * d_obs);
