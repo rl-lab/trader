@@ -23,6 +23,9 @@ for _, code, *args in tqdm(stocks):
     while (rs.error_code == '0') & rs.next():
         data_list.append(rs.get_row_data())
     result = pd.DataFrame(data_list, columns=rs.fields)
+    result['time'] = pd.to_datetime(result['time'], format='%Y%m%d%H%M%S%f')
+    result['time'] = result['time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    result = result.round(3)
 
     result.to_csv(f"data/{code}.30min.csv.gz", compression='gzip', index=False)
 
